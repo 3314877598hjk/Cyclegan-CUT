@@ -112,7 +112,7 @@ class BaseModel(ABC):
                 # Move network to device
                 net.to(self.device)
 
-                # Wrap networks with DDP after loading
+                # 分布式训练包装 (DDP)
                 if dist.is_initialized():
                     # Check if using syncbatch normalization for DDP
                     if self.opt.norm == "syncbatch":
@@ -288,7 +288,6 @@ class BaseModel(ABC):
         for name in self.model_names:
             if isinstance(name, str):
                 net = getattr(self, "net" + name)
-
                 # Move to device
                 if torch.cuda.is_available():
                     if "LOCAL_RANK" in os.environ:

@@ -57,7 +57,7 @@ class CycleGANModel(BaseModel):
             opt (Option class)-- stores all the experiment flags; needs to be a subclass of BaseOptions
         """
         BaseModel.__init__(self, opt)
-        # specify the training losses you want to print out. The training/test scripts will call <BaseModel.get_current_losses>
+        ## 1. 定义要追踪的损失和要可视化的图像
         self.loss_names = ["D_A", "G_A", "cycle_A", "idt_A", "D_B", "G_B", "cycle_B", "idt_B"]
         # specify the images you want to save/display. The training/test scripts will call <BaseModel.get_current_visuals>
         visual_names_A = ["real_A", "fake_B", "rec_A"]
@@ -74,7 +74,6 @@ class CycleGANModel(BaseModel):
             self.model_names = ["G_A", "G_B"]
 
         # define networks (both Generators and discriminators)
-        # The naming is different from those used in the paper.
         # Code (vs. paper): G_A (G), G_B (F), D_A (D_Y), D_B (D_X)
         self.netG_A = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain)
         self.netG_B = networks.define_G(opt.output_nc, opt.input_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain)

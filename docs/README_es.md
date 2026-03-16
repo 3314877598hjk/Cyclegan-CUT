@@ -109,13 +109,13 @@ bash ./datasets/download_cyclegan_dataset.sh maps
 - Entrenar el modelo:
 ```bash
 #!./scripts/train_cyclegan.sh
-python train.py --dataroot ./datasets/maps --name maps_cyclegan --model cycle_gan
+python train.py --dataroot ./datasets/maps --name map2vector_cyclegan --model cycle_gan
 ```
 Para ver más resultados intermedios, consulte `./checkpoints/maps_cyclegan/web/index.html`.
 - Pruebe el modelo:
 ```bash
 #!./scripts/test_cyclegan.sh
-python test.py --dataroot ./datasets/maps --name maps_cyclegan --model cycle_gan
+python test.py --dataroot ./datasets/maps --name map2vector_cyclegan --model cycle_gan
 ```
 -Los resultados de la prueba se guardarán en un archivo html aquí: `./results/maps_cyclegan/latest_test/index.html`.
 

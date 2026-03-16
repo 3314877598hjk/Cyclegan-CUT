@@ -72,7 +72,7 @@ class CustomDatasetDataLoader:
         Step 2: create a multi-threaded data loader.
         """
         self.opt = opt
-        dataset_class = find_dataset_using_name(opt.dataset_mode)
+        dataset_class = find_dataset_using_name(opt.dataset_mode)   # <-- 使用 opt.dataset_mode
         self.dataset = dataset_class(opt)
         print("dataset [%s] was created" % type(self.dataset).__name__)
 

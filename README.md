@@ -137,7 +137,7 @@ bash ./datasets/download_cyclegan_dataset.sh maps
 
 ```bash
 #!./scripts/train_cyclegan.sh
-python train.py --dataroot ./datasets/maps --name maps_cyclegan --model cycle_gan --use_wandb
+python train.py --dataroot ./datasets/maps --name map2vector_cyclegan --model cycle_gan --use_wandb
 ```
 
 To see more intermediate results, check out `./checkpoints/maps_cyclegan/web/index.html`.
@@ -146,7 +146,7 @@ To see more intermediate results, check out `./checkpoints/maps_cyclegan/web/ind
 
 ```bash
 #!./scripts/test_cyclegan.sh
-python test.py --dataroot ./datasets/maps --name maps_cyclegan --model cycle_gan
+python test.py --dataroot ./datasets/maps --name map2vector_cyclegan --model cycle_gan
 ```
 
 - The test results will be saved to a html file here: `./results/maps_cyclegan/latest_test/index.html`.
@@ -306,3 +306,156 @@ If you love cats, and love reading cool graphics, vision, and learning papers, p
 ## Acknowledgments
 
 Our code is inspired by [pytorch-DCGAN](https://github.com/pytorch/examples/tree/master/dcgan).
+ssh -p 46185 root@connect.nmb2.seetacloud.com
+JOGx2wic6PWn
+ssh -p 43533 root@connect.nmb2.seetacloud.com
+CycleGAN的效果受多个关键配置参数影响。以下是主要参数及其对模型效果的影响分析：
+
+---
+
+### **1. 学习率（Learning Rate）**
+- **作用**：控制优化器更新模型参数的步长。
+  - **过高**：可能导致训练不稳定（梯度爆炸或震荡）。
+  - **过低**：收敛速度慢，可能陷入局部最优。
+- **推荐设置**：
+  - 初始学习率通常设为 `0.0002`（如知识库中提到的）。
+  - 配合**学习率衰减策略**（如线性衰减、余弦衰减）。
+- **代码示例**：
+  ```python
+  optimizer_G = torch.optim.Adam(
+      itertools.chain(netG_A2B.parameters(), netG_B2A.parameters()),
+      lr=0.0002, betas=(0.5, 0.999)
+  )
+  scheduler_G = get_scheduler(optimizer_G, opt)  # 如线性衰减
+  ```
+
+---
+
+### **2. 批量大小（Batch Size）**
+- **作用**：
+  - **小批量（如1~2）**：提高泛化能力，但训练噪声大，收敛慢。
+  - **大批量**：训练更稳定，但可能过拟合或忽略数据分布细节。
+- **推荐设置**：
+  - 对于图像生成任务，通常选择 `1` 或 `2` 的批量大小（如知识库建议）。
+  - 根据显存容量调整，避免OOM（内存不足）。
+
+---
+
+### **3. 损失权重（Lambda系数）**
+- **循环一致性损失（`lambda_cycle`）**：
+  - **作用**：控制生成图像与原始输入的匹配程度。
+    - **值越大**：生成图像更接近原始输入（保留更多特征），风格迁移减弱。
+    - **值越小**：风格迁移更明显，但可能丢失细节。
+  - **推荐设置**：通常设为 `10.0`（如知识库示例）。
+    ```python
+    loss_cycle_A = criterionCycle(rec_A, real_A) * lambda_cycle_loss
+    ```
+
+- **身份映射损失（`lambda_identity`）**：
+  - **作用**：当输入图像来自目标域时，要求生成器输出与输入一致（防止模式崩溃）。
+    - **启用（>0）**：有助于保持颜色分布的一致性。
+    - **禁用（=0）**：适用于两个域差异较大的情况。
+  - **推荐设置**：通常设为 `5.0` 或 `10.0`。
+    ```python
+    if identity_lambda > 0:
+        idt_A = netG_A2B(fake_B)
+        loss_idt_A = criterionIdt(idt_A, fake_B) * beta * identity_lambda
+    ```
+
+---
+
+### **4. 网络结构参数**
+- **生成器深度**：
+  - 使用更深的ResNet或U-Net结构可以捕捉更复杂的特征，但会增加计算开销。
+- **判别器类型**：
+  - 常用PatchGAN判别器（如70x70卷积核），输出局部真实/假概率，减少全局依赖。
+- **归一化层**：
+  - **InstanceNorm**：适用于单张图像归一化，避免风格泄露。
+  - **SyncBatchNorm**：多GPU训练时同步BatchNorm统计量。
+
+---
+
+### **5. 数据预处理与增强**
+- **填充方式（`--preprocess`）**：
+  - 如 `scale_width`, `crop`, `resize_and_crop` 等，影响输入图像的分布。
+- **数据增强**：
+  - 随机翻转、旋转、裁剪等，提升模型泛化能力。
+- **未配对数据集（`--dataset_mode unaligned`）**：
+  - 确保两个域的数据分布差异足够大，但需避免完全不相关。
+
+---
+
+### **6. 优化器与训练策略**
+- **优化器选择**：
+  - 使用Adam优化器（`betas=(0.5, 0.999)`）是常见配置。
+- **判别器更新频率（`--D_update_ratio`）**：
+  - 增加判别器训练次数（如 `D_update_ratio=2`）可提升生成器的对抗能力。
+- **早停机制（Early Stopping）**：
+  - 监控验证集的损失或生成质量，避免过拟合。
+
+---
+
+### **7. 其他关键参数**
+- **迭代次数（`--n_epochs`）**：
+  - 典型训练周期为100~200轮，需根据数据集复杂度调整。
+- **图像池大小（`--pool_size`）**：
+  - 缓存历史生成图像供判别器使用（如 `pool_size=50`），避免模式崩溃。
+- **随机种子（`--seed`）**：
+  - 控制初始化和数据打乱的随机性，确保实验可复现。
+
+---
+
+### **8. 超参数调优建议**
+1. **默认配置**：
+   - 从论文或开源实现（如官方PyTorch CycleGAN）的默认参数开始。
+2. **逐步调整**：
+   - 优先调整 `lambda_cycle` 和 `lambda_identity`，观察生成图像的风格迁移程度。
+3. **监控指标**：
+   - 记录训练损失（`loss_G`, `loss_D`, `loss_cycle`）和生成图像的视觉效果。
+4. **实验对比**：
+   - 通过消融实验（Ablation Study）验证不同参数组合的影响。
+
+---
+
+### **总结**
+| 参数类别           | 关键参数                  | 推荐范围/值               | 影响方向                     |
+|--------------------|---------------------------|---------------------------|------------------------------|
+| 学习率             | `lr`                      | 0.0002                    | 训练稳定性与收敛速度         |
+| 批量大小           | `batch_size`              | 1~2                       | 泛化能力与训练效率           |
+| 损失权重           | `lambda_cycle`            | 10.0                      | 风格迁移与细节保留的平衡     |
+|                    | `lambda_identity`         | 5.0~10.0                  | 颜色一致性与模式崩溃控制     |
+| 网络结构           | 生成器深度                | ResNet-9                  | 特征提取能力                 |
+| 数据预处理         | `--preprocess`            | `resize_and_crop`         | 输入分布与多样性             |
+| 训练策略           | `D_update_ratio`          | 1~2                       | 生成器与判别器的对抗强度     |
+
+通过合理配置这些参数，可以显著提升CycleGAN的生成效果。建议从默认值开始，逐步调整并监控实验结果。
+
+
+
+一、 项目整体架构与核心组件
+base_model.py (抽象基类):
+这是所有具体模型（如 Pix2PixModel, CycleGANModel）的父类。
+它定义了模型必须实现的抽象方法：set_input, forward, optimize_parameters。这强制了所有子模型遵循统一的接口。
+它提供了通用功能：
+网络管理: 通过 model_names 列表跟踪需要保存/加载的网络（如 ["G", "D"]）。
+损失管理: 通过 loss_names 列表跟踪需要打印/记录的损失（如 ["G_GAN", "G_L1"]）。
+可视化管理: 通过 visual_names 列表跟踪需要显示/保存的图像（如 ["real_A", "fake_B", "real_B"]）。
+设备与分布式: 处理 GPU 设备分配和 DDP（Distributed Data Parallel）初始化。
+生命周期方法: setup (初始化、加载预训练模型、创建学习率调度器), save_networks, load_networks, update_learning_rate, get_current_visuals, get_current_losses 等。
+networks.py (网络工厂):
+这是一个工具库，包含了构建生成器（Generator）和判别器（Discriminator）所需的所有模块。
+define_G / define_D: 根据传入的字符串参数（如 netG="unet_256", netD="basic"）动态创建对应的网络实例。
+生成器 (ResnetGenerator, UnetGenerator): 实现了 ResNet 和 U-Net 架构，这是图像转换任务中最常用的两种编码器-解码器结构。
+判别器 (NLayerDiscriminator, PixelDiscriminator): 实现了 PatchGAN（局部判别）和 PixelGAN（像素级判别）。
+GANLoss: 一个通用的 GAN 损失计算类，支持 vanilla (原始 GAN, BCEWithLogitsLoss), lsgan (最小二乘 GAN, MSELoss) 等模式。
+辅助函数: 如权重初始化 (init_weights)、学习率调度器 (get_scheduler)、归一化层 (get_norm_layer) 等。
+具体模型文件 (如 pix2pix_model.py, cycle_gan_model.py):
+这些是 BaseModel 的具体实现，代表了不同的图像转换算法。
+Pix2PixModel: 实现了 配对数据 的图像转换。它使用条件 GAN（cGAN），其中判别器不仅看生成的图像 fake_B，还同时看输入图像 real_A（即 torch.cat((real_A, fake_B), 1)）。损失函数 = GAN Loss + λ * L1 Loss。要求数据集模式为 aligned。
+CycleGANModel: 实现了 非配对数据 的图像转换。它使用两个生成器（G_A: A->B, G_B: B->A）和两个判别器（D_A, D_B）。核心是循环一致性损失（Cycle Consistency Loss），确保 G_B(G_A(A)) ≈ A 和 G_A(G_B(B)) ≈ B。可选恒等映射损失（Identity Loss）以保留颜色等信息。要求数据集模式为 unaligned。
+ColorizationModel: 是 Pix2PixModel 的子类，专门用于黑白图像上色。它在 Lab 色彩空间中工作，输入是 L 通道，输出是 ab 通道。重写了可视化方法以显示 RGB 图像。
+TestModel: 仅用于测试阶段，加载一个预训练的生成器并对单张图像进行推理。
+TemplateModel: 一个简单的模板，展示了如何从头开始构建自己的模型，只使用 L1 回归损失。
+train.py (训练主脚本):
+这是程序的入口，负责协调上述所有组件完成训练流程。
+

@@ -3,12 +3,42 @@ import torch.nn as nn
 from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
-
+import torch.nn.functional as F
 
 ###############################################################################
 # Helper Functions
 ###############################################################################
 
+class SelfAttention(nn.Module):
+    """Self-attention layer for global context modeling."""
+    def __init__(self, in_channels):
+        super(SelfAttention, self).__init__()
+        self.in_channels = in_channels
+        self.query_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.gamma = nn.Parameter(torch.zeros(1))  # 可学习的权重，初始为0（等价于跳过）
+
+    def forward(self, x):
+        batch_size, C, H, W = x.size()
+        N = H * W
+
+        # 计算 Q, K, V
+        Q = self.query_conv(x).view(batch_size, -1, N).permute(0, 2, 1)  # (B, N, C//8)
+        K = self.key_conv(x).view(batch_size, -1, N)                     # (B, C//8, N)
+        V = self.value_conv(x).view(batch_size, -1, N)                   # (B, C, N)
+
+        # Attention map: softmax(QK^T / sqrt(d_k))
+        energy = torch.bmm(Q, K)  # (B, N, N)
+        attention = F.softmax(energy, dim=-1)
+
+        # 加权求和
+        out = torch.bmm(V, attention.permute(0, 2, 1))  # (B, C, N)
+        out = out.view(batch_size, C, H, W)
+
+        # 残差连接：out = γ * attention_out + x
+        out = self.gamma * out + x
+        return out
 
 class Identity(nn.Module):
     def forward(self, x):
@@ -346,6 +376,10 @@ class ResnetGenerator(nn.Module):
         for i in range(n_blocks):  # add ResNet blocks
 
             model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+
+        # ============ 插入 Self-Attention ============
+        model += [SelfAttention(ngf * mult)]
+        # ==========================================
 
         for i in range(n_downsampling):  # add upsampling layers
             mult = 2 ** (n_downsampling - i)

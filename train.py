@@ -1,24 +1,3 @@
-"""General-purpose training script for image-to-image translation.
-
-This script works for various models (with option '--model': e.g., pix2pix, cyclegan, colorization) and
-different datasets (with option '--dataset_mode': e.g., aligned, unaligned, single, colorization).
-You need to specify the dataset ('--dataroot'), experiment name ('--name'), and model ('--model').
-
-It first creates model, dataset, and visualizer given the option.
-It then does standard network training. During the training, it also visualize/save the images, print/save the loss plot, and save models.
-The script supports continue/resume training. Use '--continue_train' to resume your previous training.
-
-Example:
-    Train a CycleGAN model:
-        python train.py --dataroot ./datasets/maps --name maps_cyclegan --model cycle_gan
-    Train a pix2pix model:
-        python train.py --dataroot ./datasets/facades --name facades_pix2pix --model pix2pix --direction BtoA
-
-See options/base_options.py and options/train_options.py for more training options.
-See training and test tips at: https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/docs/tips.md
-See frequently asked questions at: https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/docs/qa.md
-"""
-
 import time
 from options.train_options import TrainOptions
 from data import create_dataset
@@ -28,8 +7,8 @@ from util.util import init_ddp, cleanup_ddp
 
 
 if __name__ == "__main__":
-    opt = TrainOptions().parse()  # get training options
-    opt.device = init_ddp()
+    opt = TrainOptions().parse()  # 解析命令行参数，得到一个包含所有配置的 `opt` 对象
+    opt.device = init_ddp()  # 初始化分布式训练环境（如果启用）
     dataset = create_dataset(opt)  # create a dataset given opt.dataset_mode and other options
     dataset_size = len(dataset)  # get the number of images in the dataset.
     print(f"The number of training images = {dataset_size}")
@@ -55,7 +34,7 @@ if __name__ == "__main__":
             total_iters += opt.batch_size
             epoch_iter += opt.batch_size
             model.set_input(data)  # unpack data from dataset and apply preprocessing
-            model.optimize_parameters()  # calculate loss functions, get gradients, update network weights
+            model.optimize_parameters()  # 执行前向传播、计算损失、反向传播、更新权重
 
             if total_iters % opt.display_freq == 0:  # display images on visdom and save images to a HTML file
                 save_result = total_iters % opt.update_html_freq == 0
@@ -75,7 +54,7 @@ if __name__ == "__main__":
 
             iter_data_time = time.time()
 
-        model.update_learning_rate()  # update learning rates at the end of every epoch
+        model.update_learning_rate()  # 在每个 epoch 结束时，根据调度策略调整学习率
 
         if epoch % opt.save_epoch_freq == 0:  # cache our model every <save_epoch_freq> epochs
             print(f"saving the model at the end of epoch {epoch}, iters {total_iters}")
@@ -84,4 +63,4 @@ if __name__ == "__main__":
 
         print(f"End of epoch {epoch} / {opt.n_epochs + opt.n_epochs_decay} \t Time Taken: {time.time() - epoch_start_time:.0f} sec")
 
-    cleanup_ddp()
+    cleanup_ddp()# 如果使用了分布式训练，最后进行清理
