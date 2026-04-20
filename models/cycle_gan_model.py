@@ -38,6 +38,8 @@ class CycleGANModel(BaseModel):
         Dropout is not used in the original CycleGAN paper.
         """
         parser.set_defaults(no_dropout=True)  # default CycleGAN did not use dropout
+        # --no_attention disables the self-attention module for ablation baseline (G0/G1)
+        parser.add_argument("--no_attention", action="store_true", help="disable self-attention module in generator (use for ablation baseline)")
         if is_train:
             parser.add_argument("--lambda_A", type=float, default=10.0, help="weight for cycle loss (A -> B -> A)")
             parser.add_argument("--lambda_B", type=float, default=10.0, help="weight for cycle loss (B -> A -> B)")
@@ -47,6 +49,8 @@ class CycleGANModel(BaseModel):
                 default=0.5,
                 help="use identity mapping. Setting lambda_identity other than 0 has an effect of scaling the weight of the identity mapping loss. For example, if the weight of the identity loss should be 10 times smaller than the weight of the reconstruction loss, please set lambda_identity = 0.1",
             )
+            parser.add_argument("--use_edge_loss", action="store_true", help="enable Sobel edge consistency loss for structure preservation")
+            parser.add_argument("--lambda_edge", type=float, default=1.0, help="weight for edge consistency loss")
 
         return parser
 
@@ -57,8 +61,9 @@ class CycleGANModel(BaseModel):
             opt (Option class)-- stores all the experiment flags; needs to be a subclass of BaseOptions
         """
         BaseModel.__init__(self, opt)
-        ## 1. 定义要追踪的损失和要可视化的图像
         self.loss_names = ["D_A", "G_A", "cycle_A", "idt_A", "D_B", "G_B", "cycle_B", "idt_B"]
+        if self.isTrain and getattr(opt, 'use_edge_loss', False):
+            self.loss_names += ["edge_A", "edge_B"]
         # specify the images you want to save/display. The training/test scripts will call <BaseModel.get_current_visuals>
         visual_names_A = ["real_A", "fake_B", "rec_A"]
         visual_names_B = ["real_B", "fake_A", "rec_B"]
@@ -75,8 +80,9 @@ class CycleGANModel(BaseModel):
 
         # define networks (both Generators and discriminators)
         # Code (vs. paper): G_A (G), G_B (F), D_A (D_Y), D_B (D_X)
-        self.netG_A = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain)
-        self.netG_B = networks.define_G(opt.output_nc, opt.input_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain)
+        use_attention = not getattr(opt, 'no_attention', False)
+        self.netG_A = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, use_attention=use_attention)
+        self.netG_B = networks.define_G(opt.output_nc, opt.input_nc, opt.ngf, opt.netG, opt.norm, not opt.no_dropout, opt.init_type, opt.init_gain, use_attention=use_attention)
 
         if self.isTrain:  # define discriminators
             self.netD_A = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D, opt.norm, opt.init_type, opt.init_gain)
@@ -91,6 +97,8 @@ class CycleGANModel(BaseModel):
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)  # define GAN loss.
             self.criterionCycle = torch.nn.L1Loss()
             self.criterionIdt = torch.nn.L1Loss()
+            if getattr(opt, 'use_edge_loss', False):
+                self.criterionEdge = networks.EdgeLoss().to(self.device)
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             self.optimizer_G = torch.optim.Adam(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(itertools.chain(self.netD_A.parameters(), self.netD_B.parameters()), lr=opt.lr, betas=(opt.beta1, 0.999))
@@ -174,8 +182,16 @@ class CycleGANModel(BaseModel):
         self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
         # Backward cycle loss || G_A(G_B(B)) - B||
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
+        # Edge consistency loss: structural boundaries in fake should match real input
+        if getattr(self.opt, 'use_edge_loss', False):
+            self.loss_edge_A = self.criterionEdge(self.fake_B, self.real_A) * self.opt.lambda_edge
+            self.loss_edge_B = self.criterionEdge(self.fake_A, self.real_B) * self.opt.lambda_edge
+        else:
+            self.loss_edge_A = 0
+            self.loss_edge_B = 0
+
         # combined loss and calculate gradients
-        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
+        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B + self.loss_edge_A + self.loss_edge_B
         self.loss_G.backward()
 
     def optimize_parameters(self):

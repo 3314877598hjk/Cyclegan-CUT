@@ -34,6 +34,9 @@ cycleGAN_loss.png
 # Gradio
 .gradio/
 
+# Personal documents
+docx/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1,4 +1,13 @@
-torch>=0.4.1
-torchvision>=0.2.1
+torch>=2.4.0
+torchvision>=0.19.0
 dominate>=2.3.1
 visdom>=0.1.8.3
+Pillow>=10.0.0
+wandb>=0.16.0
+gradio>=3.32.0
+setuptools>=69.0.0
+# 评估指标依赖
+scikit-image>=0.21.0
+scipy>=1.11.0
+lpips>=0.1.4
+torch-fidelity>=0.3.0

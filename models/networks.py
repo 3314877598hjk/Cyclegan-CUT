@@ -159,7 +159,7 @@ def init_net(net, init_type="normal", init_gain=0.02):
     return net
 
 
-def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, init_type="normal", init_gain=0.02):
+def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, init_type="normal", init_gain=0.02, use_attention=True):
     """Create a generator
 
     Parameters:
@@ -171,6 +171,7 @@ def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, in
         use_dropout (bool) -- if use dropout layers.
         init_type (str)    -- the name of our initialization method.
         init_gain (float)  -- scaling factor for normal, xavier and orthogonal.
+        use_attention (bool) -- if insert self-attention module in ResNet generator.
 
     Returns a generator
     """
@@ -178,9 +179,9 @@ def define_G(input_nc, output_nc, ngf, netG, norm="batch", use_dropout=False, in
     norm_layer = get_norm_layer(norm_type=norm)
 
     if netG == "resnet_9blocks":
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
+        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9, use_attention=use_attention)
     elif netG == "resnet_6blocks":
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6)
+        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6, use_attention=use_attention)
     elif netG == "unet_128":
         net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == "unet_256":
@@ -340,13 +341,38 @@ def cal_gradient_penalty(netD, real_data, fake_data, device, type="mixed", const
         return 0.0, None
 
 
+class EdgeLoss(nn.Module):
+    """Sobel edge detection loss for structural consistency between input and output.
+
+    Computes L1 loss between the edge maps of two images, encouraging the generator
+    to preserve structural boundaries during style transfer.
+    """
+
+    def __init__(self):
+        super().__init__()
+        kernel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]])
+        kernel_y = torch.tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]])
+        self.register_buffer('kernel_x', kernel_x.unsqueeze(0).unsqueeze(0))
+        self.register_buffer('kernel_y', kernel_y.unsqueeze(0).unsqueeze(0))
+
+    def _get_edges(self, img):
+        # img: (B, 3, H, W) in [-1, 1]; convert to grayscale then apply Sobel
+        gray = 0.299 * img[:, 0:1] + 0.587 * img[:, 1:2] + 0.114 * img[:, 2:3]
+        ex = F.conv2d(gray, self.kernel_x, padding=1)
+        ey = F.conv2d(gray, self.kernel_y, padding=1)
+        return torch.sqrt(ex ** 2 + ey ** 2 + 1e-6)
+
+    def forward(self, pred, target):
+        return F.l1_loss(self._get_edges(pred), self._get_edges(target))
+
+
 class ResnetGenerator(nn.Module):
     """Resnet-based generator that consists of Resnet blocks between a few downsampling/upsampling operations.
 
     We adapt Torch code and idea from Justin Johnson's neural style transfer project(https://github.com/jcjohnson/fast-neural-style)
     """
 
-    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, padding_type="reflect"):
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, padding_type="reflect", use_attention=True):
         """Construct a Resnet-based generator
 
         Parameters:
@@ -357,6 +383,7 @@ class ResnetGenerator(nn.Module):
             use_dropout (bool)  -- if use dropout layers
             n_blocks (int)      -- the number of ResNet blocks
             padding_type (str)  -- the name of padding layer in conv layers: reflect | replicate | zero
+            use_attention (bool) -- if insert self-attention after residual blocks
         """
         assert n_blocks >= 0
         super(ResnetGenerator, self).__init__()
@@ -374,12 +401,10 @@ class ResnetGenerator(nn.Module):
 
         mult = 2**n_downsampling
         for i in range(n_blocks):  # add ResNet blocks
-
             model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
 
-        # ============ 插入 Self-Attention ============
-        model += [SelfAttention(ngf * mult)]
-        # ==========================================
+        if use_attention:
+            model += [SelfAttention(ngf * mult)]
 
         for i in range(n_downsampling):  # add upsampling layers
             mult = 2 ** (n_downsampling - i)
