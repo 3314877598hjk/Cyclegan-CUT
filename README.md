@@ -1,16 +1,16 @@
-# 基于改进 CycleGAN 的无配对图像迁移研究与可视化系统
+# 基于改进 CUT 的无配对图像迁移研究与可视化系统
 
-> **毕业设计** · 面向地图矢量化与风格迁移任务的 CycleGAN 改进研究与系统实现
+> **毕业设计** · 面向地图矢量化与风格迁移任务的 CUT 改进研究与系统实现
 
 ---
 
 ## 项目简介
 
-本项目以**无配对图像迁移**为研究背景，在经典 CycleGAN 框架上进行了以下改进：
+本项目以 **CUT（Contrastive Unpaired Translation）** 为基础框架，将双向循环一致性损失替换为单向 PatchNCE 对比学习，并在此之上引入了以下改进：
 
 1. **自注意力增强生成器（Self-Attention Generator）**：在 ResNet 生成器残差块之后插入轻量自注意力模块，使模型在全局范围内建立空间依赖，提升对道路、边界、区域块等关键结构的捕捉能力。
 
-2. **Sobel 边缘一致性损失（Edge Consistency Loss）**：针对地图矢量化任务中轮廓易失真的问题，设计了基于 Sobel 算子的结构保持损失，约束生成图像的边缘分布与输入一致。
+2. **Sobel 边缘一致性损失（Edge Consistency Loss）**：针对地图矢量化任务中轮廓易失真的问题，设计了基于 Sobel 算子的结构保持损失，约束生成图像的边缘分布与输入图像一致。
 
 3. **多任务推理系统与显存调度（Multi-Task Demo with LRU Scheduling）**：实现了基于 Gradio 的在线推理界面，支持多任务切换；采用 LRU 缓存策略限制同时驻留显存中的模型数量，并在任务切换时自动将旧模型迁移至 CPU、释放显存。
 
@@ -27,26 +27,29 @@
 
 ## 消融实验设计
 
-本项目设计了四组对照实验，用于验证各改进点的有效性：
+本项目设计了五组对照实验，覆盖基线对比与各改进点的独立验证：
 
-| 组别 | 自注意力 | 边缘损失 | 说明 |
-|------|---------|---------|------|
-| **G0** | ✗ | ✗ | 原始 CycleGAN 基线 |
-| **G1** | ✗ | ✓ | + 边缘一致性损失 |
-| **G2** | ✓ | ✗ | + 自注意力模块 |
-| **G3** | ✓ | ✓ | 完整改进模型 |
+| 组别 | 模型基础 | 自注意力 | 边缘损失 | 说明 |
+|------|---------|---------|---------|------|
+| **G0** | CycleGAN | ✗ | ✗ | 原始 CycleGAN 对比基线 |
+| **G1** | CUT | ✗ | ✗ | CUT 基线（仅 PatchNCE） |
+| **G2** | CUT | ✓ | ✗ | + 自注意力模块 |
+| **G3** | CUT | ✗ | ✓ | + 边缘一致性损失 |
+| **G4** | CUT | ✓ | ✓ | 完整改进模型 |
 
 ---
 
 ## 项目结构
 
 ```
-pytorch-CycleGAN-and-pix2pix/
+Cyclegan-CUT/
 ├── models/
-│   ├── networks.py          # 网络结构：SelfAttention、EdgeLoss、ResnetGenerator
-│   ├── cycle_gan_model.py   # CycleGAN 模型：支持边缘损失和注意力开关
+│   ├── networks.py          # 网络结构：SelfAttention、EdgeLoss、PatchSampleF、PatchNCELoss
+│   ├── cut_model.py         # CUT 模型：PatchNCE + 注意力 + 边缘损失
+│   ├── cycle_gan_model.py   # CycleGAN 模型（用于 G0 对比基线）
 │   └── ...
 ├── scripts/
+│   ├── train_cut.sh         # CUT 训练快捷脚本
 │   ├── eval_metrics.py      # 评估脚本（SSIM / LPIPS / FID / 边缘保持率）
 │   └── benchmark_inference.py  # 推理性能基准（延迟 / 显存 / 吞吐量）
 ├── app.py                   # Gradio 多任务演示系统（LRU 显存调度）
@@ -76,47 +79,70 @@ pip install -r requirements.txt
 
 ## 训练
 
-### G0：原始 CycleGAN 基线
+### G0：原始 CycleGAN 对比基线
 
 ```bash
 python train.py \
     --dataroot ./datasets/maps \
-    --name G0_baseline \
+    --name G0_cyclegan \
     --model cycle_gan \
     --no_attention \
     --n_epochs 100 --n_epochs_decay 100
 ```
 
-### G1：+ 边缘一致性损失
+### G1：CUT 基线（无注意力、无边缘损失）
 
 ```bash
 python train.py \
     --dataroot ./datasets/maps \
-    --name G1_edge_loss \
-    --model cycle_gan \
-    --no_attention \
-    --use_edge_loss --lambda_edge 1.0 \
+    --name G1_cut_base \
+    --model cut \
+    --no_attention --no_edge_loss \
     --n_epochs 100 --n_epochs_decay 100
 ```
 
-### G2：+ 自注意力模块
+### G2：CUT + 自注意力模块
 
 ```bash
 python train.py \
     --dataroot ./datasets/maps \
-    --name G2_attention \
-    --model cycle_gan \
+    --name G2_cut_attn \
+    --model cut \
+    --no_edge_loss \
     --n_epochs 100 --n_epochs_decay 100
 ```
 
-### G3：完整改进模型（默认）
+### G3：CUT + 边缘一致性损失
 
 ```bash
 python train.py \
     --dataroot ./datasets/maps \
-    --name G3_full \
-    --model cycle_gan \
-    --use_edge_loss --lambda_edge 1.0 \
+    --name G3_cut_edge \
+    --model cut \
+    --no_attention --lambda_edge 1.0 \
+    --n_epochs 100 --n_epochs_decay 100
+```
+
+### G4：完整改进模型（默认）
+
+```bash
+python train.py \
+    --dataroot ./datasets/maps \
+    --name G4_cut_full \
+    --model cut \
+    --lambda_edge 1.0 \
+    --n_epochs 100 --n_epochs_decay 100
+```
+
+### FastCUT 模式（更轻量）
+
+```bash
+python train.py \
+    --dataroot ./datasets/maps \
+    --name G4_fastcut_full \
+    --model cut \
+    --CUT_mode FastCUT \
+    --lambda_edge 1.0 \
     --n_epochs 100 --n_epochs_decay 100
 ```
 
@@ -125,9 +151,9 @@ python train.py \
 ```bash
 torchrun --nproc_per_node=2 train.py \
     --dataroot ./datasets/maps \
-    --name G3_full \
-    --model cycle_gan \
-    --use_edge_loss
+    --name G4_cut_full \
+    --model cut \
+    --lambda_edge 1.0
 ```
 
 ---
@@ -139,23 +165,23 @@ torchrun --nproc_per_node=2 train.py \
 ```bash
 python test.py \
     --dataroot ./datasets/maps \
-    --name G3_full \
-    --model cycle_gan \
+    --name G4_cut_full \
+    --model cut \
     --direction AtoB
 ```
 
 ### 量化评估（SSIM / LPIPS / 边缘保持率）
 
 ```bash
-# 评估 G0 基线
+# 评估 G0 CycleGAN 基线
 python scripts/eval_metrics.py \
     --real_dir datasets/maps/testB \
-    --fake_dir results/G0_baseline/test_latest/images/fake_B
+    --fake_dir results/G0_cyclegan/test_latest/images/fake_B
 
-# 评估 G3 完整模型，并计算 FID
+# 评估 G4 完整模型，并计算 FID
 python scripts/eval_metrics.py \
     --real_dir datasets/maps/testB \
-    --fake_dir results/G3_full/test_latest/images/fake_B \
+    --fake_dir results/G4_cut_full/test_latest/images/fake_B \
     --compute_fid
 ```
 
@@ -175,7 +201,7 @@ python scripts/benchmark_inference.py --benchmark_throughput --n_images 100
 ### 损失曲线可视化
 
 ```bash
-python plot_loss.py --log_path checkpoints/G3_full/loss_log.txt
+python plot_loss.py --log_path checkpoints/G4_cut_full/loss_log.txt
 ```
 
 ---
@@ -198,19 +224,19 @@ python app.py
 
 将经典的 Query / Key / Value 注意力机制嵌入 ResNet 生成器，插入位置在全部残差块之后、上采样之前。注意力权重 γ 初始化为 0，使模块在训练初期等价于恒等映射，随训练推进逐步学习全局关联。
 
-训练时通过 `--no_attention` 关闭（用于 G0/G1 消融基线），默认开启。
+训练时通过 `--no_attention` 关闭（用于 G0/G1/G3 消融对照），默认开启。
 
 ### 2. Sobel 边缘一致性损失
 
-位于 [models/networks.py](models/networks.py)，`EdgeLoss` 类；集成于 [models/cycle_gan_model.py](models/cycle_gan_model.py)。
+位于 [models/networks.py](models/networks.py)，`EdgeLoss` 类；集成于 [models/cut_model.py](models/cut_model.py)。
 
 对输入图像和生成图像分别提取灰度 Sobel 边缘图，计算 L1 损失：
 
 ```
-L_edge = λ_edge × (L1(edge(fake_B), edge(real_A)) + L1(edge(fake_A), edge(real_B)))
+L_edge = λ_edge × L1(edge(fake_B), edge(real_A))
 ```
 
-对地图矢量化任务，该损失直接约束道路边界和区域轮廓的保留。通过 `--use_edge_loss` 开启，`--lambda_edge` 控制权重（默认 1.0）。
+对地图矢量化任务，该损失直接约束道路边界和区域轮廓的保留。通过 `--no_edge_loss` 禁用，`--lambda_edge` 控制权重（默认 1.0）。
 
 ### 3. LRU 显存调度
 
@@ -228,12 +254,16 @@ L_edge = λ_edge × (L1(edge(fake_B), edge(real_A)) + L1(edge(fake_A), edge(real
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--no_attention` | 关闭（默认开启注意力） | 禁用自注意力模块 |
-| `--use_edge_loss` | False | 开启边缘一致性损失 |
+| `--model` | cycle_gan | 模型类型（cut / cycle_gan / pix2pix / test） |
+| `--CUT_mode` | CUT | CUT 变体（CUT / FastCUT） |
+| `--no_attention` | 关闭（默认开启） | 禁用自注意力模块 |
+| `--no_edge_loss` | 关闭（默认开启） | 禁用边缘一致性损失 |
 | `--lambda_edge` | 1.0 | 边缘损失权重 |
-| `--lambda_A` | 10.0 | A→B→A 循环一致损失权重 |
-| `--lambda_B` | 10.0 | B→A→B 循环一致损失权重 |
-| `--lambda_identity` | 0.5 | 身份映射损失权重 |
+| `--lambda_NCE` | 1.0 (CUT) / 10.0 (FastCUT) | PatchNCE 损失权重 |
+| `--nce_layers` | 4,8,12,16 | 提取 PatchNCE 特征的生成器层编号 |
+| `--num_patches` | 256 | 每个特征图采样的 patch 数量 |
+| `--nce_T` | 0.07 | PatchNCE 对比温度系数 |
+| `--lambda_GAN` | 1.0 | 对抗损失权重 |
 | `--gan_mode` | lsgan | GAN 损失类型（lsgan / vanilla / wgangp） |
 | `--netG` | resnet_9blocks | 生成器类型 |
 | `--norm` | instance | 归一化层类型 |
@@ -247,6 +277,7 @@ L_edge = λ_edge × (L1(edge(fake_B), edge(real_A)) + L1(edge(fake_A), edge(real
 
 本项目基于以下工作：
 
+- **CUT**: Park et al., *Contrastive Learning for Unpaired Image-to-Image Translation*, ECCV 2020. [[arxiv]](https://arxiv.org/abs/2007.15651)
 - **CycleGAN**: Zhu et al., *Unpaired Image-to-Image Translation using Cycle-Consistent Adversarial Networks*, ICCV 2017. [[arxiv]](https://arxiv.org/abs/1703.10593)
 - **Self-Attention GAN**: Zhang et al., *Self-Attention Generative Adversarial Networks*, ICML 2019.
 - **PatchGAN / pix2pix**: Isola et al., *Image-to-Image Translation with Conditional Adversarial Networks*, CVPR 2017.
