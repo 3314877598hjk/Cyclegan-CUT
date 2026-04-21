@@ -11,23 +11,12 @@ from models import create_model
 from util import util
 
 
+# CUT is one-way. Train and store one checkpoint per translation direction.
 TASKS = {
-    "Map -> Vector": {
-        "name": "map2vector_cyclegan",
-        "direction": "AtoB",
-    },
-    "Vector -> Map": {
-        "name": "map2vector_cyclegan",
-        "direction": "BtoA",
-    },
-    "Horse -> Zebra": {
-        "name": "zebra2horse_cyclegan",
-        "direction": "AtoB",
-    },
-    "Zebra -> Horse": {
-        "name": "zebra2horse_cyclegan",
-        "direction": "BtoA",
-    },
+    "Map -> Vector": {"name": "map2vector_cut", "direction": "AtoB"},
+    "Vector -> Map": {"name": "vector2map_cut", "direction": "AtoB"},
+    "Horse -> Zebra": {"name": "horse2zebra_cut", "direction": "AtoB"},
+    "Zebra -> Horse": {"name": "zebra2horse_cut", "direction": "AtoB"},
 }
 
 
@@ -36,7 +25,12 @@ class InferenceOptions:
     name: str
     direction: str
     checkpoints_dir: str = "./checkpoints"
-    model: str = "cycle_gan"
+    model: str = "cut"
+    CUT_mode: str = "CUT"
+    nce_layers: str = "4,8,12,16"
+    lambda_NCE: float | None = None
+    nce_idt: bool = False
+    no_nce_idt: bool = False
     netG: str = "resnet_9blocks"
     norm: str = "instance"
     no_dropout: bool = True
@@ -58,7 +52,7 @@ class InferenceOptions:
     init_gain: float = 0.02
     load_iter: int = 0
     continue_train: bool = False
-    no_attention: bool = False  # existing checkpoints were trained with attention enabled
+    no_attention: bool = False
     gpu_ids: list[int] = field(default_factory=list)
     device: torch.device = field(init=False)
 
@@ -141,8 +135,7 @@ def inference(input_image, task_name: str):
         model.set_input(data)
         model.test()
         visuals = model.get_current_visuals()
-        output = visuals["fake_B"] if opt.direction == "AtoB" else visuals["fake_A"]
-        return util.tensor2im(output)
+        return util.tensor2im(visuals["fake_B"])
 
 
 def build_demo():
@@ -157,20 +150,14 @@ def build_demo():
     return gr.Interface(
         fn=inference,
         inputs=[
-            gr.Image(type="pil", label="输入图像 / Input Image"),
-            gr.Dropdown(
-                choices=list(TASKS.keys()),
-                value="Map -> Vector",
-                label="翻译任务 / Translation Task",
-            ),
+            gr.Image(type="pil", label="Input Image"),
+            gr.Dropdown(choices=list(TASKS.keys()), value="Map -> Vector", label="Translation Task"),
         ],
-        outputs=gr.Image(type="numpy", label="输出图像 / Output Image"),
-        title="基于改进 CycleGAN 的无配对图像翻译演示系统",
+        outputs=gr.Image(type="numpy", label="Output Image"),
+        title="CUT Unpaired Image Translation Demo",
         description=(
-            "本系统基于 CycleGAN 框架，集成了自注意力模块（Self-Attention）与 Sobel 边缘一致性损失，"
-            "支持多任务切换与 LRU 显存调度。当前支持地图矢量化与马斑马风格迁移任务。\n\n"
-            "Unpaired image-to-image translation demo with self-attention generator and edge consistency loss. "
-            "Supports multi-task LRU model caching for efficient GPU memory management."
+            "CUT/FastCUT backend with PatchNCE, a self-attention generator, "
+            "Sobel edge consistency loss, and LRU model caching."
         ),
     )
 

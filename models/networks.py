@@ -356,14 +356,90 @@ class EdgeLoss(nn.Module):
         self.register_buffer('kernel_y', kernel_y.unsqueeze(0).unsqueeze(0))
 
     def _get_edges(self, img):
-        # img: (B, 3, H, W) in [-1, 1]; convert to grayscale then apply Sobel
-        gray = 0.299 * img[:, 0:1] + 0.587 * img[:, 1:2] + 0.114 * img[:, 2:3]
+        # img is in [-1, 1]; convert RGB to grayscale before applying Sobel.
+        if img.size(1) == 1:
+            gray = img
+        else:
+            gray = 0.299 * img[:, 0:1] + 0.587 * img[:, 1:2] + 0.114 * img[:, 2:3]
         ex = F.conv2d(gray, self.kernel_x, padding=1)
         ey = F.conv2d(gray, self.kernel_y, padding=1)
         return torch.sqrt(ex ** 2 + ey ** 2 + 1e-6)
 
     def forward(self, pred, target):
         return F.l1_loss(self._get_edges(pred), self._get_edges(target))
+
+
+class PatchSampleF(nn.Module):
+    """Sample spatial patches from feature maps for PatchNCE.
+
+    CUT compares corresponding patch features from the input image and the
+    generated image. This module samples the same spatial indices from every
+    feature pair and L2-normalizes the sampled vectors.
+    """
+
+    def __init__(self, use_l2_norm=True):
+        super().__init__()
+        self.use_l2_norm = use_l2_norm
+
+    def forward(self, feats, num_patches=256, patch_ids=None):
+        return_feats = []
+        return_ids = []
+
+        for feat_id, feat in enumerate(feats):
+            b, c, h, w = feat.shape
+            feat_reshape = feat.permute(0, 2, 3, 1).flatten(1, 2)
+            spatial_size = feat_reshape.shape[1]
+
+            if num_patches > 0:
+                if patch_ids is not None:
+                    patch_id = patch_ids[feat_id].to(feat.device)
+                else:
+                    patch_id = torch.randperm(spatial_size, device=feat.device)
+                    patch_id = patch_id[: min(num_patches, spatial_size)]
+                sampled = feat_reshape[:, patch_id, :].flatten(0, 1)
+            else:
+                patch_id = torch.arange(spatial_size, device=feat.device)
+                sampled = feat_reshape.flatten(0, 1)
+
+            if self.use_l2_norm:
+                sampled = F.normalize(sampled, p=2, dim=1)
+
+            return_feats.append(sampled)
+            return_ids.append(patch_id)
+
+        return return_feats, return_ids
+
+
+class PatchNCELoss(nn.Module):
+    """Patch-wise contrastive loss used by CUT.
+
+    Positive pairs are features at the same sampled spatial location. Negative
+    pairs are other sampled locations within the same image.
+    """
+
+    def __init__(self, temperature=0.07):
+        super().__init__()
+        self.temperature = temperature
+        self.cross_entropy_loss = nn.CrossEntropyLoss(reduction="none")
+
+    def forward(self, feat_q, feat_k, batch_size):
+        feat_k = feat_k.detach()
+        dim = feat_q.shape[1]
+        num_patches = feat_q.shape[0] // batch_size
+
+        feat_q = feat_q.reshape(batch_size, num_patches, dim)
+        feat_k = feat_k.reshape(batch_size, num_patches, dim)
+
+        l_pos = (feat_q * feat_k).sum(dim=2).reshape(batch_size * num_patches, 1)
+        l_neg = torch.bmm(feat_q, feat_k.transpose(2, 1))
+
+        diagonal = torch.eye(num_patches, dtype=torch.bool, device=feat_q.device)
+        l_neg.masked_fill_(diagonal.unsqueeze(0), -10.0)
+        l_neg = l_neg.reshape(batch_size * num_patches, num_patches)
+
+        logits = torch.cat((l_pos, l_neg), dim=1) / self.temperature
+        targets = torch.zeros(logits.shape[0], dtype=torch.long, device=feat_q.device)
+        return self.cross_entropy_loss(logits, targets)
 
 
 class ResnetGenerator(nn.Module):
@@ -415,9 +491,28 @@ class ResnetGenerator(nn.Module):
 
         self.model = nn.Sequential(*model)
 
-    def forward(self, input):
-        """Standard forward"""
-        return self.model(input)
+    def forward(self, input, layers=None, encode_only=False):
+        """Run the generator or return intermediate encoder features.
+
+        CUT reuses the generator encoder as a feature extractor. When
+        ``encode_only`` is true, this method returns activations from the
+        requested layer ids without decoding to an output image.
+        """
+        if layers is None:
+            layers = []
+        if not layers and not encode_only:
+            return self.model(input)
+
+        feat = input
+        feats = []
+        max_layer = max(layers) if layers else len(self.model) - 1
+        for layer_id, layer in enumerate(self.model):
+            feat = layer(feat)
+            if layer_id in layers:
+                feats.append(feat)
+            if encode_only and layer_id >= max_layer:
+                return feats
+        return feats if encode_only else feat
 
 
 class ResnetBlock(nn.Module):
